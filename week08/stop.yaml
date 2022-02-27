@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-sigterm
+spec:
+  terminationGracePeriodSeconds: 60
+  containers:
+    - name: no-sigterm
+      image: zouxinyao/httpserver:0.0.1
+      command: ["/bin/sh"]
+      args: ["-c", "while true; do echo hello; sleep 10;done"]
+
+# 这里更好的是服务业务代码实现shutdown优雅退出，然后通过cli等命令行执行对应的退出命令。
