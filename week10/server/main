@@ -1,0 +1,124 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"math/rand"
+	"net"
+	"net/http"
+	"os"
+	"server/metrics"
+	"strings"
+	"time"
+
+	"github.com/golang/glog"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var gauge = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Namespace: "httpserver",
+		Name:      "httpserver_response_time",
+		Help:      "这是模拟响应时间",
+		ConstLabels: map[string]string{
+			"path":   "/httpserver",
+			"custom": "这里是一组自定义标签",
+		},
+	})
+
+func init() {
+	// 在默认的注册表中注册该指标
+
+}
+func main() {
+	flag.Set("v", "4")
+	glog.V(2).Info("Starting http server...")
+	metrics.Register()
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/", rootHandler)
+	// 为http增加metrics连接;
+
+	mux.Handle("/metrics", promhttp.Handler())
+	prometheus.MustRegister(gauge)
+	mux.HandleFunc("/responseheader", responseheader)
+	mux.HandleFunc("/ReadOSEnv", ReadOSEnv)
+	mux.HandleFunc("/images", images)
+	mux.HandleFunc("/Readlog", Readlog)
+	mux.HandleFunc("/healthz", healthz)
+	err := http.ListenAndServe(":8079", mux)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+func images(w http.ResponseWriter, r *http.Request) {
+	timer := metrics.NewTimer()
+	defer timer.ObserveTotal()
+	rand.Seed(time.Now().Unix())
+	randInt := rand.Intn(2000)
+	time.Sleep(time.Millisecond * time.Duration(randInt))
+	w.Write([]byte(fmt.Sprintf("<h1>%d<h1>", randInt)))
+}
+func rootHandler(writer http.ResponseWriter, request *http.Request) {
+
+	fmt.Fprintf(writer, "hello")
+
+}
+
+// 1. 接收客户端 request，并将 request 中带的 header 写入 response header
+func responseheader(writer http.ResponseWriter, request *http.Request) {
+	header := request.Header
+	for key, v := range header {
+		writer.Header().Set(key, strings.Join(v, ","))
+	}
+}
+
+// 2. 读取当前系统的环境变量中的 VERSION 配置，并写入 response header
+func ReadOSEnv(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("VERSION", os.Getenv("VERSION"))
+	fmt.Fprintf(writer, os.Getenv("VERSION"))
+}
+
+// 3. Server 端记录访问日志包括客户端 IP，HTTP 返回码，输出到 server 端的标准输出
+func Readlog(writer http.ResponseWriter, request *http.Request) {
+	ip, err := GetIP(request)
+	if err != nil {
+		ip = ""
+	}
+	glog.V(2).Infoln(ip, http.StatusOK)
+}
+
+// 4. 当访问 localhost/healthz 时，应返回 200
+func healthz(writer http.ResponseWriter, request *http.Request) {
+	fmt.Fprintf(writer, "200\n")
+
+}
+
+// GetIP returns request real ip.
+func GetIP(r *http.Request) (string, error) {
+	ip := r.Header.Get("X-Real-IP")
+	if net.ParseIP(ip) != nil {
+		return ip, nil
+	}
+
+	ip = r.Header.Get("X-Forward-For")
+	for _, i := range strings.Split(ip, ",") {
+		if net.ParseIP(i) != nil {
+			return i, nil
+		}
+	}
+
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return "", err
+	}
+
+	if net.ParseIP(ip) != nil {
+		return ip, nil
+	}
+
+	return "", errors.New("no valid ip found")
+}
